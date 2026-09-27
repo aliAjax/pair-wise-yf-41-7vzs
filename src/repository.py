@@ -2,7 +2,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-from .domain import ConflictError, NotFoundError
+from .domain import ConflictError, InvalidTransition, NotFoundError
 
 
 def utcnow():
@@ -54,6 +54,15 @@ class SQLiteRepository:
                     created_at TEXT NOT NULL,
                     PRIMARY KEY(actor_id, idem_key)
                 );
+                CREATE TABLE IF NOT EXISTS entity_versions (
+                    entity_id TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL,
+                    PRIMARY KEY(entity_id, version)
+                );
             """)
 
     @staticmethod
@@ -77,6 +86,11 @@ class SQLiteRepository:
                 "INSERT INTO entities(id, kind, status, version, data, created_by, created_at, updated_at) "
                 "VALUES (?, ?, ?, 1, ?, ?, ?, ?)",
                 (entity_id, kind, status, payload, actor_id, now, now),
+            )
+            connection.execute(
+                "INSERT INTO entity_versions(entity_id, version, kind, status, data, recorded_at) "
+                "VALUES (?, 1, ?, ?, ?, ?)",
+                (entity_id, kind, status, payload, now),
             )
         return self.get_entity(entity_id)
 
@@ -132,6 +146,11 @@ class SQLiteRepository:
                 "WHERE id = ? AND version = ?",
                 (status, payload, now, entity_id, current_version),
             )
+            connection.execute(
+                "INSERT INTO entity_versions(entity_id, version, kind, status, data, recorded_at) "
+                "SELECT id, version, kind, ?, data, ? FROM entities WHERE id = ?",
+                (status, now, entity_id),
+            )
             connection.commit()
         except Exception:
             connection.rollback()
@@ -139,6 +158,91 @@ class SQLiteRepository:
         finally:
             connection.close()
         return self.get_entity(entity_id)
+
+    @staticmethod
+    def _version_from_row(row):
+        return {
+            "entity_id": row["entity_id"],
+            "version": int(row["version"]),
+            "kind": row["kind"],
+            "status": row["status"],
+            "data": json.loads(row["data"]),
+            "recorded_at": row["recorded_at"],
+        }
+
+    def list_versions(self, entity_id):
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM entity_versions WHERE entity_id = ? ORDER BY version",
+                (entity_id,),
+            ).fetchall()
+        return [self._version_from_row(row) for row in rows]
+
+    def apply_revision(self, event_id, expected_event_version, event_status, event_data,
+                       order_id, expected_order_version, order_status, order_data):
+        """审批通过时在同一事务内更新事件和修订单，避免一方成功另一方失败。"""
+        now = utcnow()
+        event_payload = json.dumps(event_data, ensure_ascii=False, sort_keys=True)
+        order_payload = json.dumps(order_data, ensure_ascii=False, sort_keys=True)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+
+            event_row = connection.execute(
+                "SELECT version, status FROM entities WHERE id = ?", (event_id,)
+            ).fetchone()
+            if not event_row:
+                raise NotFoundError("entity not found: " + event_id)
+            event_version = int(event_row["version"])
+            if event_version != int(expected_event_version):
+                raise ConflictError(
+                    "revision order is stale: event version expected %s, found %s"
+                    % (expected_event_version, event_version)
+                )
+            if event_row["status"] not in ("published", "revised"):
+                raise InvalidTransition(
+                    "cannot apply revision to event in status %s" % event_row["status"]
+                )
+
+            order_row = connection.execute(
+                "SELECT version FROM entities WHERE id = ?", (order_id,)
+            ).fetchone()
+            if not order_row:
+                raise NotFoundError("entity not found: " + order_id)
+            order_version = int(order_row["version"])
+            if order_version != int(expected_order_version):
+                raise ConflictError(
+                    "version conflict: order expected %s, found %s"
+                    % (expected_order_version, order_version)
+                )
+
+            connection.execute(
+                "UPDATE entities SET status = ?, version = version + 1, data = ?, updated_at = ? "
+                "WHERE id = ?",
+                (event_status, event_payload, now, event_id),
+            )
+            connection.execute(
+                "INSERT INTO entity_versions(entity_id, version, kind, status, data, recorded_at) "
+                "SELECT id, version, kind, ?, data, ? FROM entities WHERE id = ?",
+                (event_status, now, event_id),
+            )
+            connection.execute(
+                "UPDATE entities SET status = ?, version = version + 1, data = ?, updated_at = ? "
+                "WHERE id = ?",
+                (order_status, order_payload, now, order_id),
+            )
+            connection.execute(
+                "INSERT INTO entity_versions(entity_id, version, kind, status, data, recorded_at) "
+                "SELECT id, version, kind, ?, data, ? FROM entities WHERE id = ?",
+                (order_status, now, order_id),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.get_entity(event_id), self.get_entity(order_id)
 
     def append_audit(self, entity_id, actor_id, actor_role, action, from_status, to_status, detail):
         with self._connect() as connection:

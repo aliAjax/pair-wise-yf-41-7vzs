@@ -5,30 +5,411 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>地震台网事件编目与修订</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1f2937; }
-    main { max-width: 820px; margin: auto; }
-    pre { background: #f3f4f6; padding: 1rem; border-radius: 8px; overflow-x: auto; }
-    button { padding: .5rem .8rem; cursor: pointer; }
+    :root { --border: #d1d5db; --muted: #6b7280; --bg: #f9fafb; --ok: #065f46; --ok-bg: #d1fae5; --warn: #92400e; --warn-bg: #fef3c7; --err: #991b1b; --err-bg: #fee2e2; }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; margin: 0; color: #1f2937; background: var(--bg); }
+    main { max-width: 1080px; margin: auto; padding: 1.5rem; }
+    h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+    h2 { font-size: 1.05rem; margin: 1.25rem 0 .5rem; }
+    .sub { color: var(--muted); font-size: .85rem; margin-bottom: 1rem; }
+    .bar { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: .6rem .9rem; margin-bottom: 1rem; }
+    .bar label { font-size: .85rem; color: var(--muted); }
+    input, select, textarea { font: inherit; padding: .4rem .5rem; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+    textarea { width: 100%; min-height: 56px; resize: vertical; }
+    button { padding: .45rem .8rem; cursor: pointer; border: 1px solid #374151; background: #374151; color: #fff; border-radius: 6px; font-size: .85rem; }
+    button.secondary { background: #fff; color: #374151; }
+    button.danger { background: #b91c1c; border-color: #b91c1c; }
+    button.success { background: #047857; border-color: #047857; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .card { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: .9rem 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+    th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    tr.clickable { cursor: pointer; }
+    tr.clickable:hover { background: #f3f4f6; }
+    tr.selected { background: #e0e7ff; }
+    .tag { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .75rem; font-weight: 600; }
+    .tag.published, .tag.revised, .tag.approved { background: var(--ok-bg); color: var(--ok); }
+    .tag.pending, .tag.reviewed, .tag.associated { background: #dbeafe; color: #1e40af; }
+    .tag.rejected, .tag.withdrawn, .tag.withdrawn-event { background: var(--warn-bg); color: var(--warn); }
+    .tag.candidate { background: #f3f4f6; color: #374151; }
+    .muted { color: var(--muted); font-size: .8rem; }
+    .field { margin-bottom: .55rem; }
+    .field label { display: block; font-size: .8rem; color: var(--muted); margin-bottom: .2rem; }
+    .field input { width: 100%; }
+    .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: flex-end; }
+    .row .field { flex: 1 1 120px; }
+    pre { background: #f3f4f6; padding: .75rem; border-radius: 8px; overflow-x: auto; font-size: .78rem; max-height: 260px; overflow-y: auto; }
+    #flash { display: none; padding: .6rem .9rem; border-radius: 8px; margin-bottom: .75rem; font-size: .85rem; white-space: pre-wrap; }
+    #flash.error { display: block; background: var(--err-bg); color: var(--err); border: 1px solid #fca5a5; }
+    #flash.info { display: block; background: #dbeafe; color: #1e40af; border: 1px solid #93c5fd; }
+    .order-actions { display: flex; gap: .4rem; }
+    .kv { display: grid; grid-template-columns: 5.5rem 1fr; gap: .2rem .6rem; font-size: .85rem; }
+    .kv dt { color: var(--muted); }
+    .kv dd { margin: 0; }
+    @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
 <main>
   <h1>地震台网事件编目与修订</h1>
-  <p>这是最小演示页面。使用浏览器或 curl 调用 JSON API。</p>
-  <p><button onclick="checkHealth()">检查服务状态</button></p>
-  <pre id="result">等待操作</pre>
-  <h2>常用接口</h2>
-  <pre>GET  /health
-GET  /api/&lt;kind&gt;
-POST /api/&lt;kind&gt;
-GET  /api/entities/&lt;id&gt;
-POST /api/entities/&lt;id&gt;/actions</pre>
+  <p class="sub">编目发布后，补报台站数据须提交独立修订单（新增台站 / 修订震级 / 修订依据），经审批后事件变为「已修订」，历史编目按版本保留。</p>
+
+  <div class="bar">
+    <label>身份</label>
+    <input id="userId" value="rev-1" size="8" aria-label="用户">
+    <select id="role" aria-label="角色">
+      <option value="reviewer">reviewer 复核</option>
+      <option value="admin">admin 管理员</option>
+      <option value="analyst">analyst 分析员</option>
+      <option value="station">station 台站</option>
+      <option value="viewer">viewer 只读</option>
+    </select>
+    <button class="secondary" onclick="checkHealth()">健康检查</button>
+    <button class="secondary" onclick="loadAll()">刷新</button>
+    <button class="secondary" onclick="seedDemo()">生成演示事件（走到发布）</button>
+  </div>
+
+  <div id="flash"></div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>事件列表</h2>
+      <table>
+        <thead><tr><th>标题</th><th>状态</th><th>版本</th><th>震级</th><th>修订次数</th></tr></thead>
+        <tbody id="eventRows"><tr><td colspan="5" class="muted">加载中…</td></tr></tbody>
+      </table>
+
+      <h2 id="detailTitle">事件详情</h2>
+      <div id="eventDetail" class="muted">点击左侧事件查看详情与历史版本。</div>
+    </section>
+
+    <section class="card">
+      <h2>提交修订单（待审）</h2>
+      <p class="muted">仅对「已发布 / 已修订」事件可提交；需写明新增台站、修订后震级和修订依据。</p>
+      <form id="orderForm" onsubmit="return submitOrder(event)">
+        <div class="field"><label>目标事件</label><input id="orderEvent" readonly placeholder="请先在左侧选择事件"></div>
+        <div class="row">
+          <div class="field"><label>新增台站代码</label><input id="stationCode" placeholder="STA-3"></div>
+          <div class="field"><label>时间偏移(秒)</label><input id="stationOffset" value="1" type="number" step="any"></div>
+          <div class="field"><label>距离(km)</label><input id="stationDistance" value="2.0" type="number" step="any"></div>
+        </div>
+        <div class="field"><label>修订后震级</label><input id="newMagnitude" type="number" step="0.1" placeholder="4.3"></div>
+        <div class="field"><label>修订依据</label><textarea id="basis" placeholder="如：STA-3 补报震相，用中位数法重新标定震级"></textarea></div>
+        <button type="submit" class="success">提交待审修订单</button>
+      </form>
+
+      <h2>修订单列表</h2>
+      <table>
+        <thead><tr><th>订单</th><th>状态</th><th>版本</th><th>震级</th><th>操作</th></tr></thead>
+        <tbody id="orderRows"><tr><td colspan="5" class="muted">加载中…</td></tr></tbody>
+      </table>
+    </section>
+  </div>
 </main>
+
 <script>
+let events = [];
+let orders = [];
+let selectedId = null;
+
+function flash(message, isError) {
+  const el = document.getElementById('flash');
+  el.textContent = message;
+  el.className = isError ? 'error' : 'info';
+  if (!isError) setTimeout(() => { el.className = ''; el.textContent = ''; }, 4000);
+}
+
+function actorHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    'X-User-Id': document.getElementById('userId').value || 'anonymous',
+    'X-Role': document.getElementById('role').value,
+  };
+}
+
+async function api(method, path, body) {
+  const response = await fetch(path, {
+    method,
+    headers: actorHeaders(),
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error((payload && payload.error) || ('HTTP ' + response.status));
+  }
+  return payload;
+}
+
+function esc(value) {
+  return String(value === null || value === undefined ? '' : value)
+    .replace(/[&<>"]/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[ch]));
+}
+
+function statusTag(status) {
+  const label = {
+    candidate: '候选', associated: '已关联', reviewed: '已复核',
+    published: '已发布', revised: '已修订', withdrawn: '已撤回',
+    pending: '待审批', approved: '已通过', rejected: '已驳回',
+  }[status] || status;
+  return '<span class="tag ' + esc(status) + '">' + esc(label) + '</span>';
+}
+
 async function checkHealth() {
   const response = await fetch('/health');
-  document.getElementById('result').textContent = JSON.stringify(await response.json(), null, 2);
+  flash(JSON.stringify(await response.json(), null, 2), false);
 }
+
+async function loadAll() {
+  try {
+    const [eventPayload, orderPayload] = await Promise.all([
+      api('GET', '/api/events'),
+      api('GET', '/api/revision_orders'),
+    ]);
+    events = eventPayload.items || [];
+    orders = orderPayload.items || [];
+    if (selectedId && !events.some(e => e.id === selectedId)) selectedId = null;
+    renderEvents();
+    renderOrders();
+    if (selectedId) await renderDetail(selectedId); else renderEmptyDetail();
+  } catch (err) {
+    flash('加载失败：' + err.message, true);
+  }
+}
+
+function renderEvents() {
+  const tbody = document.getElementById('eventRows');
+  if (!events.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="muted">暂无事件</td></tr>';
+    return;
+  }
+  tbody.innerHTML = events.map(e => {
+    const d = e.data || {};
+    return '<tr class="clickable ' + (e.id === selectedId ? 'selected' : '') +
+      '" onclick="selectEvent(\'' + e.id + '\')">' +
+      '<td>' + esc(d.title || e.id) + '</td>' +
+      '<td>' + statusTag(e.status) + '</td>' +
+      '<td>v' + e.version + '</td>' +
+      '<td>' + esc(d.magnitude === undefined ? '-' : d.magnitude) + '</td>' +
+      '<td>' + esc(d.revision_count || 0) + '</td></tr>';
+  }).join('');
+}
+
+function renderEmptyDetail() {
+  document.getElementById('detailTitle').textContent = '事件详情';
+  document.getElementById('eventDetail').innerHTML = '<span class="muted">点击左侧事件查看详情与历史版本。</span>';
+  document.getElementById('orderEvent').value = '';
+}
+
+function selectEvent(id) {
+  selectedId = id;
+  document.getElementById('orderEvent').value = id;
+  renderEvents();
+  renderOrders();
+  renderDetail(id);
+}
+
+async function renderDetail(id) {
+  document.getElementById('orderEvent').value = id;
+  try {
+    const [entity, versions] = await Promise.all([
+      api('GET', '/api/entities/' + id),
+      api('GET', '/api/entities/' + id + '/versions'),
+    ]);
+    const d = entity.data || {};
+    const stations = (d.reports || []).map(r => esc(r.station)).join('、') || '-';
+    let html = '<dl class="kv">' +
+      '<dt>事件ID</dt><dd>' + esc(entity.id) + '</dd>' +
+      '<dt>状态</dt><dd>' + statusTag(entity.status) + '（当前 v' + entity.version + '）</dd>' +
+      '<dt>震级</dt><dd>' + esc(d.magnitude === undefined ? '-' : d.magnitude) + '</dd>' +
+      '<dt>修订次数</dt><dd>' + esc(d.revision_count || 0) + '</dd>' +
+      '<dt>关联台站</dt><dd>' + stations + '</dd>';
+    if (d.last_revision) {
+      html += '<dt>最近修订</dt><dd>第 ' + esc(entity.data.revision_count) +
+        ' 次；依据：' + esc(d.last_revision.basis) +
+        '；审批人：' + esc(d.last_revision.approved_by) + '</dd>';
+    }
+    html += '</dl>';
+
+    html += '<h2>编目动作</h2><div class="order-actions">' +
+      '<button class="secondary" onclick="eventAction(\'associate\', {})" ' +
+      (entity.status !== 'candidate' ? 'disabled' : '') + '关联台站</button>' +
+      '<button class="secondary" onclick="reviewEvent()" ' +
+      (entity.status !== 'associated' ? 'disabled' : '') + '复核定震级</button>' +
+      '<button class="secondary" onclick="publishEvent()" ' +
+      (entity.status !== 'reviewed' ? 'disabled' : '') + '发布</button></div>';
+
+    html += '<h2>历史编目（按版本保留）</h2><table><thead><tr><th>版本</th><th>状态</th><th>震级</th><th>台站数</th><th>记录时间</th></tr></thead><tbody>' +
+      (versions.items || []).map(v =>
+        '<tr><td>v' + v.version + '</td><td>' + statusTag(v.status) + '</td>' +
+        '<td>' + esc(v.data.magnitude === undefined ? '-' : v.data.magnitude) + '</td>' +
+        '<td>' + ((v.data.reports || []).length) + '</td>' +
+        '<td class="muted">' + esc(v.recorded_at) + '</td></tr>'
+      ).join('') + '</tbody></table>';
+
+    document.getElementById('detailTitle').textContent = '事件详情：' + (d.title || id);
+    document.getElementById('eventDetail').innerHTML = html;
+  } catch (err) {
+    flash('读取事件失败：' + err.message, true);
+  }
+}
+
+function renderOrders() {
+  const tbody = document.getElementById('orderRows');
+  const visible = selectedId ? orders.filter(o => (o.data || {}).event_id === selectedId) : orders;
+  if (!visible.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="muted">' +
+      (selectedId ? '该事件暂无修订单' : '暂无修订单') + '</td></tr>';
+    return;
+  }
+  tbody.innerHTML = visible.map(o => {
+    const d = o.data || {};
+    const title = (d.added_stations || []).map(s => '+' + s.station).join(', ') +
+      ' / M' + d.magnitude;
+    const stale = o.status === 'pending' &&
+      d.event_base_version !== undefined &&
+      (() => { const ev = events.find(e => e.id === d.event_id); return ev && ev.version !== d.event_base_version; })();
+    const actions = o.status === 'pending'
+      ? '<div class="order-actions">' +
+        '<button class="success" onclick="approveOrder(\'' + o.id + '\',' + o.version + ')" title="基于事件 v' +
+        esc(d.event_base_version) + (stale ? '（已过期）' : '') + '">通过' +
+        (stale ? '⚠' : '') + '</button>' +
+        '<button class="secondary" onclick="rejectOrder(\'' + o.id + '\')">驳回</button>' +
+        '<button class="danger" onclick="withdrawOrder(\'' + o.id + '\')">撤回</button></div>'
+      : '<span class="muted">已终结</span>';
+    return '<tr><td title="' + esc(d.basis || '') + '">' + esc(o.id.slice(0, 8)) +
+      '<div class="muted">' + esc(title) + '</div>' +
+      '<div class="muted">基于事件 v' + esc(d.event_base_version) + '</div></td>' +
+      '<td>' + statusTag(o.status) + '</td>' +
+      '<td>v' + o.version + '</td>' +
+      '<td>' + esc(d.magnitude) + '</td>' +
+      '<td>' + actions + '</td></tr>';
+  }).join('');
+}
+
+async function submitOrder(event) {
+  event.preventDefault();
+  const eventId = document.getElementById('orderEvent').value;
+  if (!eventId) { flash('请先选择一个已发布事件', true); return false; }
+  const body = {
+    event_id: eventId,
+    added_stations: [{
+      station: document.getElementById('stationCode').value.trim(),
+      time_offset: Number(document.getElementById('stationOffset').value || 0),
+      distance_km: Number(document.getElementById('stationDistance').value || 0),
+    }],
+    magnitude: Number(document.getElementById('newMagnitude').value),
+    basis: document.getElementById('basis').value.trim(),
+  };
+  try {
+    const order = await api('POST', '/api/revision_orders', body);
+    flash('修订单 ' + order.id + ' 已提交，状态：待审批', false);
+    await loadAll();
+    selectEvent(eventId);
+  } catch (err) {
+    flash('提交失败：' + err.message, true);
+  }
+  return false;
+}
+
+async function approveOrder(orderId, expectedVersion) {
+  const order = orders.find(o => o.id === orderId);
+  if (order && order.data.event_base_version !== undefined) {
+    const ev = events.find(e => e.id === order.data.event_id);
+    if (ev && ev.version !== order.data.event_base_version) {
+      flash('版本已过期：修订单基于事件 v' + order.data.event_base_version +
+        '，事件现已修订到 v' + ev.version + '。该审批不会覆盖新数据，请基于新版本重新提交修订单。', true);
+      return;
+    }
+  }
+  try {
+    await api('POST', '/api/entities/' + orderId + '/actions', {
+      action: 'approve', data: {}, expected_version: expectedVersion,
+    });
+    flash('审批通过：事件已变为「已修订」，震级与修订次数已更新，旧版本已归档。', false);
+    await loadAll();
+    if (order) selectEvent(order.data.event_id);
+  } catch (err) {
+    flash('审批失败：' + err.message, true);
+    await loadAll();
+  }
+}
+
+async function rejectOrder(orderId) {
+  const reason = prompt('驳回理由（可选）') || '';
+  try {
+    await api('POST', '/api/entities/' + orderId + '/actions', {
+      action: 'reject', data: {reason: reason},
+    });
+    flash('修订单已驳回，事件内容保持原样。', false);
+    await loadAll();
+  } catch (err) { flash('驳回失败：' + err.message, true); }
+}
+
+async function withdrawOrder(orderId) {
+  const note = prompt('撤回说明（可选）') || '';
+  try {
+    await api('POST', '/api/entities/' + orderId + '/actions', {
+      action: 'withdraw', data: {note: note},
+    });
+    flash('修订单已撤回，事件内容保持原样。', false);
+    await loadAll();
+  } catch (err) { flash('撤回失败：' + err.message, true); }
+}
+
+async function eventAction(action, data, expected) {
+  if (!selectedId) return;
+  try {
+    await api('POST', '/api/entities/' + selectedId + '/actions', {
+      action, data, expected_version: expected,
+    });
+    await loadAll();
+    selectEvent(selectedId);
+  } catch (err) { flash('操作失败：' + err.message, true); await loadAll(); }
+}
+
+function reviewEvent() {
+  const magnitude = prompt('复核震级', '4.2');
+  if (magnitude === null) return;
+  eventAction('review', {reviewer: document.getElementById('userId').value, magnitude: Number(magnitude)});
+}
+
+function publishEvent() {
+  const communicationId = prompt('发布通报编号', 'C-' + Date.now());
+  if (communicationId === null) return;
+  eventAction('publish', {communication_id: communicationId});
+}
+
+async function seedDemo() {
+  try {
+    const code = 'STA-' + Math.random().toString(36).slice(2, 6).toUpperCase();
+    await api('POST', '/api/stations', {code: code, lat: 35.0, lon: 110.0});
+    const event = await api('POST', '/api/events', {
+      title: '演示事件 ' + new Date().toLocaleTimeString(),
+      origin_time: new Date().toISOString(),
+      location: 'Region-Demo',
+      reports: [
+        {station: code, time_offset: 2, distance_km: 1.0},
+        {station: 'STA-2', time_offset: -1, distance_km: 1.5},
+      ],
+    });
+    await api('POST', '/api/entities/' + event.id + '/actions', {action: 'associate', data: {}});
+    await api('POST', '/api/entities/' + event.id + '/actions', {
+      action: 'review', data: {reviewer: 'R-1', magnitude: 4.2},
+    });
+    await api('POST', '/api/entities/' + event.id + '/actions', {
+      action: 'publish', data: {communication_id: 'C-' + Date.now()},
+    });
+    flash('演示事件已创建并发布，可在右侧提交修订单。', false);
+    await loadAll();
+    selectEvent(event.id);
+  } catch (err) {
+    flash('生成演示事件失败：' + err.message + '\n（台站角色限制时请把身份切换为 admin）', true);
+  }
+}
+
+loadAll();
 </script>
 </body>
 </html>

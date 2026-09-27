@@ -1,8 +1,10 @@
+import math
 from datetime import datetime, timedelta
 
 from .domain import (
     ConflictError,
     InvalidTransition,
+    NotFoundError,
     PermissionDenied,
     ValidationError,
 )
@@ -19,6 +21,54 @@ def _validate_event(actor, data, lookup):
         raise ValidationError("event requires at least two station reports")
     if not data.get("title"):
         raise ValidationError("event title is required")
+
+
+def _validate_revision_order(actor, data, lookup):
+    event_id = data.get("event_id")
+    if not event_id:
+        raise ValidationError("revision order requires event_id")
+    rows = lookup("event", "id", event_id) if lookup else []
+    event = rows[0] if rows else None
+    if event is None:
+        raise NotFoundError("event not found: " + str(event_id))
+    if event["status"] not in ("published", "revised"):
+        raise InvalidTransition(
+            "revision order can only be opened for published or revised events"
+        )
+
+    added_stations = data.get("added_stations") or []
+    if not added_stations:
+        raise ValidationError("revision order requires at least one added station")
+
+    existing_codes = set()
+    for report in event["data"].get("reports") or []:
+        if report.get("station"):
+            existing_codes.add(report["station"])
+    for item in added_stations:
+        if not isinstance(item, dict) or not item.get("station"):
+            raise ValidationError("each added station requires a station code")
+        if item["station"] in existing_codes:
+            raise ValidationError(
+                "station already associated with event: " + str(item["station"])
+            )
+
+    magnitude = data.get("magnitude")
+    try:
+        magnitude = float(magnitude)
+    except (TypeError, ValueError):
+        raise ValidationError("revision magnitude must be a number")
+    if not math.isfinite(magnitude):
+        raise ValidationError("revision magnitude must be a finite number")
+
+    basis = data.get("basis")
+    if not basis or not str(basis).strip():
+        raise ValidationError("revision basis is required")
+
+    # 服务端快照：订单提交时事件所处版本，审批时据此判断版本是否过期。
+    data["event_base_version"] = event["version"]
+    data["base_magnitude"] = event["data"].get("magnitude")
+    data["base_revision_count"] = event["data"].get("revision_count", 0)
+    return data
 
 
 def _validate_associate(actor, entity, data, lookup):
@@ -49,18 +99,64 @@ def magnitude_median(amplitudes):
     return (values[middle - 1] + values[middle]) / 2.0
 
 
-CUSTOM_CREATE = {'station': _validate_station, 'event': _validate_event}
+CUSTOM_CREATE = {'station': _validate_station, 'event': _validate_event, 'revision_order': _validate_revision_order}
 CUSTOM_TRANSITIONS = {('event', 'associate'): _validate_associate}
 
 
 class RuleEngine:
-    ALIASES = {'stations': 'station', 'events': 'event'}
-    INITIAL_STATUS = {'station': 'online', 'event': 'candidate'}
-    TRANSITIONS = {'station': {'offline': (('online',), 'offline'), 'online': (('offline',), 'online')}, 'event': {'associate': (('candidate',), 'associated'), 'review': (('associated',), 'reviewed'), 'publish': (('reviewed',), 'published'), 'revise': (('published', 'revised'), 'revised'), 'withdraw': (('published', 'revised'), 'withdrawn')}}
-    CREATE_REQUIRED = {'station': ('code', 'lat', 'lon'), 'event': ('title', 'origin_time', 'location', 'reports')}
-    ACTION_REQUIRED = {('station', 'offline'): ('reason',), ('event', 'review'): ('reviewer', 'magnitude'), ('event', 'publish'): ('communication_id',), ('event', 'revise'): ('reason', 'magnitude'), ('event', 'withdraw'): ('reason',)}
-    CREATE_ROLES = {'station': ('admin', 'station'), 'event': ('admin', 'analyst')}
-    ROLE_ACTIONS = {'offline': ('admin', 'station'), 'online': ('admin', 'station'), 'associate': ('admin', 'analyst'), 'review': ('admin', 'reviewer'), 'publish': ('admin', 'reviewer'), 'revise': ('admin', 'reviewer'), 'withdraw': ('admin', 'reviewer')}
+    ALIASES = {
+        'stations': 'station',
+        'events': 'event',
+        'revision_orders': 'revision_order',
+        'orders': 'revision_order',
+    }
+    INITIAL_STATUS = {'station': 'online', 'event': 'candidate', 'revision_order': 'pending'}
+    TRANSITIONS = {
+        'station': {
+            'offline': (('online',), 'offline'),
+            'online': (('offline',), 'online'),
+        },
+        'event': {
+            'associate': (('candidate',), 'associated'),
+            'review': (('associated',), 'reviewed'),
+            'publish': (('reviewed',), 'published'),
+            # 发布后的震级修订只能通过独立的修订单审批完成，
+            # 事件本身不再提供直接覆盖震级的 revise 动作。
+            'withdraw': (('published', 'revised'), 'withdrawn'),
+        },
+        'revision_order': {
+            'approve': (('pending',), 'approved'),
+            'reject': (('pending',), 'rejected'),
+            'withdraw': (('pending',), 'withdrawn'),
+        },
+    }
+    CREATE_REQUIRED = {
+        'station': ('code', 'lat', 'lon'),
+        'event': ('title', 'origin_time', 'location', 'reports'),
+        'revision_order': ('event_id', 'added_stations', 'magnitude', 'basis'),
+    }
+    ACTION_REQUIRED = {
+        ('station', 'offline'): ('reason',),
+        ('event', 'review'): ('reviewer', 'magnitude'),
+        ('event', 'publish'): ('communication_id',),
+        ('event', 'withdraw'): ('reason',),
+    }
+    CREATE_ROLES = {
+        'station': ('admin', 'station'),
+        'event': ('admin', 'analyst'),
+        'revision_order': ('admin', 'reviewer'),
+    }
+    ROLE_ACTIONS = {
+        'offline': ('admin', 'station'),
+        'online': ('admin', 'station'),
+        'associate': ('admin', 'analyst'),
+        'review': ('admin', 'reviewer'),
+        'publish': ('admin', 'reviewer'),
+        'withdraw': ('admin', 'reviewer'),
+        ('revision_order', 'approve'): ('admin', 'reviewer'),
+        ('revision_order', 'reject'): ('admin', 'reviewer'),
+        ('revision_order', 'withdraw'): ('admin', 'reviewer'),
+    }
 
     def normalize_kind(self, kind):
         return self.ALIASES.get(kind, kind)
